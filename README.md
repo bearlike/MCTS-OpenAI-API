@@ -66,7 +66,7 @@ You can test the server using `curl` or any HTTP client.
 
 ```bash
 curl -X 'POST' \
-  'http://192.168.1.198:8000/v1/chat/completions' \
+  'http://mcts-server:8000/v1/chat/completions' \
   -H 'accept: application/json' \
   -H 'Content-Type: application/json' \
   -d '{
