@@ -1,0 +1,39 @@
+[project]
+name = "mcts-openai-api"
+version = "0.1.0"
+description = "Every incoming request is wrapped with a Monte Carlo Tree Search (MCTS) pipeline"
+authors = [
+    {name = "Krishnakanth Alagiri",email = "39209037+bearlike@users.noreply.github.com"}
+]
+license = {text = "MIT"}
+readme = "README.md"
+requires-python = ">=3.13,<4.0"
+dependencies = [
+    "loguru (>=0.7.3,<0.8.0)",
+    "uvicorn (>=0.34.0,<0.35.0)",
+    "pydantic (>=2.10.6,<3.0.0)",
+    "python-dotenv (>=1.0.1,<2.0.0)",
+    "fastapi[standard] (>=0.115.11,<0.116.0)",
+    "langchain (>=0.3.21,<0.4.0)",
+    "langchain-core (>=0.3.47,<0.4.0)",
+    "langchain-openai (>=0.3.9,<0.4.0)",
+    "httpx (>=0.28.1,<0.29.0)",
+]
+
+[project.urls]
+Repository = "https://github.com/bearlike/mcts-openai-api.git"
+Issues = "https://github.com/bearlike/mcts-openai-api/issues"
+
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry]
+package-mode = false
+
+[tool.poetry.group.dev.dependencies]
+ipykernel = "^6.29.5"
+asgi-lifespan = "^2.1.0"
+pytest = "^8.3.5"
+pytest-asyncio = "^0.25.3"

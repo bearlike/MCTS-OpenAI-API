@@ -1,0 +1,20 @@
+services:
+  mcts-api-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8336:8000" # Fast API Server
+    environment:
+      - OPENAI_API_BASE_URL=${OPENAI_API_BASE_URL:-https://api.openai.com/v1}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-change-me}
+    restart: unless-stopped
+    tmpfs:
+      - /tmp
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "8000"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    extra_hosts:
+      - host.docker.internal:host-gateway
