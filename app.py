@@ -1,37 +1,33 @@
 #!/usr/bin/env python3
 """
-main.py – OpenAI-Compatible API Server with MCTS wrapping
+OpenAI-Compatible FastAPI Server with MCTS wrapping
 
 This FastAPI server exposes two endpoints:
- • POST /v1/chat/completions – for chat completions. Every request is processed via a Monte Carlo Tree Search (MCTS) pipeline.
+ • POST /v1/chat/completions – for chat completions.
  • GET /v1/models – a simple proxy to the underlying LLM provider models endpoint.
 
-Environment Variables:
- • OPENAI_API_BASE_URL – e.g.: "http://lite-llm-proxy:4000/v1"
- • OPENAI_API_KEY – your API key
-
-To run:
-    uvicorn main:app --reload
+Each Chat Completion call is wrapped in a Monte Carlo Tree Search (MCTS)
+refinement process. Intermediate updates (Mermaid diagram and iteration details)
+are accumulated in a single <details> block and then returned together with the final answer.
 """
 
-from typing import List, Optional, AsyncGenerator, Any, Callable, Awaitable
+from typing import Any, Awaitable, Callable, List, Optional, AsyncGenerator
 import asyncio
 import random
-import httpx
-import time
 import math
+import time
 import json
-import os
 import re
+import os
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from loguru import logger
+import httpx
 
-# LangChain and OpenAI classes
 from langchain.callbacks.base import AsyncCallbackHandler
 from langchain.schema import AIMessage, HumanMessage
 from langchain_openai import ChatOpenAI
@@ -39,7 +35,7 @@ from langchain_openai import ChatOpenAI
 load_dotenv()
 
 # ----------------------------------------------------------------------
-# Global configurations (from ENV)
+# Global Configuration (from ENV)
 # ----------------------------------------------------------------------
 OPENAI_API_BASE_URL = os.environ.get(
     "OPENAI_API_BASE_URL", "http://lite-llm-proxy:4000/v1"
@@ -64,7 +60,7 @@ class ChatMessage(BaseModel):
 
 
 class ChatCompletionRequest(BaseModel):
-    model: str  # Now expected to be the actual model name (e.g.: "gpt-4")
+    model: str  # e.g.: "gpt-4o-mini"
     messages: List[ChatMessage]
     max_tokens: Optional[int] = 512
     temperature: Optional[float] = 0.1
@@ -72,7 +68,7 @@ class ChatCompletionRequest(BaseModel):
 
 
 # ----------------------------------------------------------------------
-# Async Iterator Callback for Streaming Tokens
+# Async Iterator Callback for Streaming Tokens (if needed)
 # ----------------------------------------------------------------------
 class AsyncIteratorCallbackHandler(AsyncCallbackHandler):
     def __init__(self):
@@ -99,7 +95,7 @@ class AsyncIteratorCallbackHandler(AsyncCallbackHandler):
 
 
 # ----------------------------------------------------------------------
-# LLM Client (Wrapper around language model calls)
+# LLM Client (Wrapper for LangChain OpenAI Chat Model)
 # ----------------------------------------------------------------------
 class LLMClient:
     def __init__(self):
@@ -109,14 +105,12 @@ class LLMClient:
     async def create_chat_completion(
         self, messages: List[dict], model: str, stream: bool = False
     ) -> Any:
-        # Convert messages to LangChain Message objects
         lc_messages = []
         for msg in messages:
             if msg["role"] == "user":
                 lc_messages.append(HumanMessage(content=msg["content"]))
             else:
                 lc_messages.append(AIMessage(content=msg["content"]))
-
         if stream:
             handler = AsyncIteratorCallbackHandler()
             oai_model = ChatOpenAI(
@@ -128,7 +122,6 @@ class LLMClient:
                 cache=False,
                 callbacks=[handler],
             )
-            # Launch generation asynchronously
             asyncio.create_task(oai_model.agenerate([lc_messages]))
             return handler
         else:
@@ -156,7 +149,7 @@ class LLMClient:
 
 
 # ----------------------------------------------------------------------
-# MCTS Components
+# MCTS Components: Node, Prompts, and Agent
 # ----------------------------------------------------------------------
 class Node:
     def __init__(
@@ -194,14 +187,31 @@ class Node:
             return self
         return max(self.children, key=lambda child: child.visits).best_child()
 
-    def mermaid(self, offset: int = 0) -> str:
-        padding = " " * offset
-        preview = self.content.replace('"', "").replace("\n", " ")[:25]
-        text = f'{padding}{self.id}["{self.id}: ({self.visits}) {preview}"]\n'
-        for child in self.children:
-            text += child.mermaid(offset + 4)
-            text += f"{padding}{self.id} --> {child.id}\n"
-        return text
+    def get_mermaid_lines(self) -> str:
+        """
+        Produce a valid Mermaid diagram:
+         - A line "graph TD" is first.
+         - Then all node definitions are inserted, one per line (properly quoted).
+         - Then an empty line followed by connection definitions, one per line.
+        """
+        definitions = {}
+        connections = []
+
+        def dfs(node: "Node"):
+            preview = node.content.replace('"', "'").replace("\n", " ")[:25]
+            definitions[node.id] = f'{node.id}["{node.id}: ({node.visits}) {preview}"]'
+            for child in node.children:
+                connections.append(f"{node.id} --> {child.id}")
+                dfs(child)
+
+        dfs(self)
+        lines = ["graph TD"]
+        for def_line in definitions.values():
+            lines.append("    " + def_line)
+        lines.append("")  # blank line
+        for con_line in connections:
+            lines.append("    " + con_line)
+        return "\n".join(lines)
 
 
 class MCTSPromptTemplates:
@@ -278,14 +288,14 @@ class MCTSAgent:
         self.llm_client = llm_client
         self.event_emitter = event_emitter
         self.model = model
-        self.iteration_responses = []  # Store intermediate responses
+        self.iteration_responses = []  # List to store iteration details
 
     async def search(self) -> str:
         best_answer = None
         best_score = float("-inf")
         processed_ids = set()
 
-        # Evaluate root
+        # Evaluate the root node
         root_score = await self.evaluate_answer(self.root.content)
         self.root.visits += 1
         self.root.value += root_score
@@ -302,7 +312,7 @@ class MCTSAgent:
                 ],
             }
         )
-        await self.emit_iteration_update(0)
+        await self.emit_iteration_update()
 
         for i in range(1, MAX_ITERATIONS + 1):
             await self.emit_status(f"Iteration {i}/{MAX_ITERATIONS}")
@@ -336,16 +346,23 @@ class MCTSAgent:
                         processed_ids.add(leaf.id)
             if iteration_responses:
                 self.iteration_responses.append(
-                    {"iteration": i, "responses": iteration_responses}
+                    {
+                        "iteration": i,
+                        "responses": iteration_responses,
+                    }
                 )
-            await self.emit_iteration_update(i)
-            curr = self.root.best_child()
-            current_score = curr.value / curr.visits if curr.visits > 0 else 0
+            await self.emit_iteration_update()
+            current_node = self.root.best_child()
+            current_score = (
+                (current_node.value / current_node.visits)
+                if current_node.visits > 0
+                else 0
+            )
             if current_score > best_score:
                 best_score = current_score
-                best_answer = curr.content
+                best_answer = current_node.content
 
-        await self.emit_message(f"## Best Answer:\n{best_answer}")
+        await self.emit_message(f"\n\n---\n## Best Answer:\n{best_answer}")
         return best_answer
 
     async def select(self, node: Node) -> Node:
@@ -408,17 +425,15 @@ class MCTSAgent:
             logger.error("Score parsing error: {} from '{}'", e, result)
             return 0
 
-    async def emit_iteration_update(self, iteration: int):
-        mermaid = "```mermaid\ngraph TD\n" + self.root.mermaid() + "\n```\n"
-        details = "<details>\n"
+    async def emit_iteration_update(self):
+        mermaid = "```mermaid\n" + self.root.get_mermaid_lines() + "\n```"
+        iterations = ""
         for itr in self.iteration_responses:
-            details += f"<summary>Iteration {itr['iteration']}</summary>\n"
+            iterations += f"\nIteration {itr['iteration']}:\n"
             for resp in itr["responses"]:
-                details += f"- Node `{resp['node_id']}`: Score `{resp['score']}`\n"
-                details += f"  - **Response**: {resp['content']}\n"
-            details += "\n"
-        details += "</details>\n"
-        msg = f"## Intermediate Responses\n{mermaid}\n{details}\n"
+                iterations += f"- Node `{resp['node_id']}`: Score `{resp['score']}`\n"
+                iterations += f"  - **Response**: {resp['content']}\n"
+        msg = f"## Intermediate Responses\n<details>\n<summary>Expand to View Intermediate Iterations</summary>\n\n{mermaid}\n{iterations}\n\n</details>\n"
         await self.emit_replace(msg)
 
     async def emit_message(self, message: str):
@@ -432,61 +447,49 @@ class MCTSAgent:
 
 
 # ----------------------------------------------------------------------
-# Event Emitter to Push Updates in Streaming Responses
+# Event Aggregator: For final message assembly
 # ----------------------------------------------------------------------
-class EventEmitter:
+class EventAggregator:
     def __init__(self):
-        self.queue: asyncio.Queue = asyncio.Queue()
+        self.buffer = ""
 
     async def __call__(self, event: dict):
-        logger.info("Event: {}", event)
-        await self.queue.put(event)
+        if event.get("type") == "replace":
+            self.buffer = event.get("data", {}).get("content", "")
+        else:
+            self.buffer += event.get("data", {}).get("content", "")
 
-    async def events(self) -> AsyncGenerator[str, None]:
-        while True:
-            event = await self.queue.get()
-            if event is None:
-                break
-            if event["type"] in ["message", "replace"]:
-                yield event["data"]["content"]
-
-    def close(self):
-        self.queue.put_nowait(None)
+    def get_buffer(self) -> str:
+        return self.buffer
 
 
 # ----------------------------------------------------------------------
-# Pipeline Function – Directly use request_body.model as the model name
+# Pipeline: Wraps an incoming request into the MCTS process
 # ----------------------------------------------------------------------
 class Pipeline:
     def __init__(self):
         self.llm_client = LLMClient()
 
     async def run(
-        self, request_body: ChatCompletionRequest, emitter: EventEmitter
+        self,
+        request_body: ChatCompletionRequest,
+        emitter: Callable[[dict], Awaitable[None]],
     ) -> str:
-        # Use the incoming model field directly
         model = request_body.model
-
         if not request_body.messages:
-            raise HTTPException(status_code=400, detail="No messages in the request.")
+            raise HTTPException(status_code=400, detail="No messages provided.")
         latest = request_body.messages[-1].content.strip()
         previous = "\n".join(
-            [
-                f"{msg.role.capitalize()}: {msg.content}"
-                for msg in request_body.messages[:-1]
-            ]
+            f"{msg.role.capitalize()}: {msg.content}"
+            for msg in request_body.messages[:-1]
         )
         question = MCTSPromptTemplates.thread_prompt.format(
             question=latest, messages=previous
         )
-
-        # Generate initial answer using the LLM
         initial_prompt = MCTSPromptTemplates.initial_prompt.format(question=question)
         init_reply = await self.llm_client.get_completion(
             [{"role": "user", "content": initial_prompt}], model
         )
-
-        # Wrap the call with an MCTS agent
         mcts_agent = MCTSAgent(
             root_content=init_reply,
             llm_client=self.llm_client,
@@ -495,14 +498,15 @@ class Pipeline:
             model=model,
         )
         final_answer = await mcts_agent.search()
-
-        final_mermaid = "```mermaid\ngraph TD\n" + mcts_agent.root.mermaid() + "\n```\n"
+        final_mermaid = (
+            "\n```mermaid\n" + mcts_agent.root.get_mermaid_lines() + "\n```\n"
+        )
         response_message = f"{final_mermaid}\n## Final Response\n{final_answer}"
         return response_message
 
 
 # ----------------------------------------------------------------------
-# FastAPI App
+# FastAPI App and Endpoints
 # ----------------------------------------------------------------------
 app = FastAPI(
     title="OpenAI Compatible API with MCTS",
@@ -522,27 +526,33 @@ pipeline = Pipeline()
 
 @app.post("/v1/chat/completions")
 async def chat_completions(request: ChatCompletionRequest):
-    emitter = EventEmitter()
-    stream_enabled = request.stream
+    if request.stream:
+        aggregator = EventAggregator()
+        final_text = await pipeline.run(request, aggregator)
+        full_message = aggregator.get_buffer() + "\n" + final_text
+        final_response = {
+            "id": "mcts_response",
+            "object": "chat.completion",
+            "created": time.time(),
+            "model": request.model,
+            "choices": [{"message": {"role": "assistant", "content": full_message}}],
+        }
 
-    if stream_enabled:
+        # Return a single JSON chunk with mimetype application/json
+        async def single_chunk() -> AsyncGenerator[str, None]:
+            yield json.dumps(final_response)
 
-        async def event_generator() -> AsyncGenerator[str, None]:
-            task = asyncio.create_task(pipeline.run(request, emitter))
-            async for message in emitter.events():
-                yield f"data: {json.dumps({'message': message})}\n\n"
-            result = await task
-            yield f"data: {json.dumps({'message': result})}\n\n"
-
-        return StreamingResponse(event_generator(), media_type="application/x-ndjson")
+        return StreamingResponse(single_chunk(), media_type="application/json")
     else:
-        final = await pipeline.run(request, emitter)
+        aggregator = EventAggregator()
+        final_text = await pipeline.run(request, aggregator)
+        full_message = aggregator.get_buffer() + "\n" + final_text
         return {
             "id": "mcts_response",
             "object": "chat.completion",
             "created": time.time(),
             "model": request.model,
-            "choices": [{"message": {"role": "assistant", "content": final}}],
+            "choices": [{"message": {"role": "assistant", "content": full_message}}],
         }
 
 
