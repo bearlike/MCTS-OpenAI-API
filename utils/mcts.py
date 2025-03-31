@@ -341,17 +341,25 @@ class MCTSAgent:
             node = node.parent
 
     async def generate_completion(self, prompt: str) -> str:
-        """
-        Gets a streaming completion from the LLM for a given prompt.
-        Returns the accumulated response content.
-        """
         messages = [{"role": "user", "content": prompt}]
-        content = ""
+        tokens = []  # Buffer all tokens.
         async for token in self.llm_client.get_streaming_completion(
             messages, self.model
         ):
-            content += token
-            await self.emit_message(token)
+            tokens.append(token)
+            # Remove per-token emission to prevent duplicates.
+            # (If you need per-token updates for true streaming,
+            #  consider having a separate flag or using the pipeline’s emitter.)
+
+        content = "".join(tokens)
+        if content:
+            # Emit once for the whole block.
+            await self.event_emitter(
+                {
+                    "type": "message",
+                    "data": {"reasoning_content": content, "content": content},
+                }
+            )
         return content
 
     async def generate_thought(self, answer: str) -> str:
@@ -397,19 +405,21 @@ class MCTSAgent:
         """
         mermaid = "```mermaid\n" + self.root.get_mermaid_lines() + "\n```"
         iterations = ""
-        for itr in self.iteration_responses:
-            iterations += f"\nIteration {itr['iteration']}:\n"
+        for idx, itr in enumerate(self.iteration_responses):
+            iterations += f"\n{idx+1}. Iteration ({itr['iteration']}):\n"
             for resp in itr["responses"]:
-                iterations += f"- Node `{resp['node_id']}`: Score `{resp['score']}`\n"
-                iterations += f"  - **Response**: {resp['content']}\n"
+                iterations += f"\n- Node `{resp['node_id']}`: Score `{resp['score']}` out of 10\n"
+                iterations += f"\n- **Response**: {resp['content'].strip()}\n"
 
-        # msg = "<think>\n\n"
-        msg = f"\n<details>\n\n<summary>Expand to View Intermediate Iterations</summary>\n\n{mermaid}\n{iterations}\n\n</details>\n\n"
+        msg = f"\n<details>\n\n<summary>Expand to View Intermediate Iterations</summary>\n\n{mermaid}\n{iterations}\n\n</details>\n\n---\n"
         await self.emit_replace(msg)
 
     async def emit_message(self, message: str):
         await self.event_emitter(
-            {"type": "message", "data": {"reasoning_content": message}}
+            {
+                "type": "message",
+                "data": {"reasoning_content": message, "content": message},
+            }
         )
 
     async def emit_status(self, message: str):
@@ -417,5 +427,8 @@ class MCTSAgent:
 
     async def emit_replace(self, content: str):
         await self.event_emitter(
-            {"type": "replace", "data": {"reasoning_content": content}}
+            {
+                "type": "replace",
+                "data": {"reasoning_content": content, "content": content},
+            }
         )

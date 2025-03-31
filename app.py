@@ -22,6 +22,7 @@ from dotenv import load_dotenv
 from loguru import logger
 import uvicorn
 import httpx
+import asyncio
 
 from utils.classes import (
     ChatCompletionRequest,
@@ -93,52 +94,107 @@ pipeline = Pipeline(
 
 @chat_router.post("/completions", response_model=ChatCompletionResponse)
 async def chat_completions(request: ChatCompletionRequest):
-    """
-    Handles chat completion requests by processing input through a pipeline and
-    returning the generated response. Supports both streaming and non-streaming
-    modes based on the request.
+    # Create an asyncio.Queue to collect streamed events.
+    event_queue = asyncio.Queue()
 
-    ## Args:
-    - `request` (`ChatCompletionRequest`): The input request containing model
-            details and streaming preference.
+    # Emitter: push events (dictionaries) into the queue.
+    async def emitter(event: dict):
+        await event_queue.put(event)
 
-    ## Returns:
-    - `dict` or `StreamingResponse`: A JSON response with the generated chat
-        completion, either as a single response or streamed chunks.
-    """
-    logger.debug(f"Incoming request - {request}")
-    aggregator = EventAggregator()
-    final_text = await pipeline.run(request, aggregator)
+    # Launch the streaming pipeline task.
+    stream_task = asyncio.create_task(pipeline.run_stream(request, emitter))
 
-    def build_response() -> dict:
+    if request.stream:
+
+        async def stream_generator():
+            # Send a single opening tag for the thinking block.
+            opening_event = {"choices": [{"delta": {"content": "<think>\n"}}]}
+            yield f"data: {json.dumps(opening_event)}\n\n"
+            thinking_closed = False
+
+            # Process and stream events until done.
+            while True:
+                try:
+                    event = await asyncio.wait_for(event_queue.get(), timeout=30)
+                except asyncio.TimeoutError:
+                    break
+
+                if event.get("type") in ["message", "replace"]:
+                    # If this is the final answer event (from pipeline.run_stream),
+                    # close the thinking block first.
+                    if event.get("final"):
+                        if not thinking_closed:
+                            closing_event = {"choices": [{"delta": {"content": "\n</think>"}}]}
+                            yield f"data: {json.dumps(closing_event)}\n\n"
+                            thinking_closed = True
+                        # Send the final answer (e.g. mermaid and final response) separately.
+                        chunk = {
+                            "choices": [{"delta": {"content": event["data"].get("reasoning_content", "")}}]
+                        }
+                        yield f"data: {json.dumps(chunk)}\n\n"
+                    else:
+                        # For intermediate tokens, strip any accidental <think> markers.
+                        token = event["data"].get("reasoning_content", "")
+                        token = token.replace("<think>\n", "").replace("\n</think>", "")
+                        chunk = {"choices": [{"delta": {"content": token}}]}
+                        yield f"data: {json.dumps(chunk)}\n\n"
+
+                if event.get("done"):
+                    break
+
+            # Send done signal after everything.
+            yield "data: [DONE]\n\n"
+            await stream_task
+
+        return StreamingResponse(stream_generator(), media_type="text/event-stream")
+
+    else:
+        # Non-streaming: accumulate all tokens.
+        collected = ""
+        in_block = False
+        while True:
+            try:
+                event = await asyncio.wait_for(event_queue.get(), timeout=30)
+            except asyncio.TimeoutError:
+                break
+            if event.get("type") in ["message", "replace"]:
+                token = event["data"].get("reasoning_content", "")
+                # Only start a <think> block once.
+                if not in_block:
+                    collected += "<think>\n"
+                    in_block = True
+                collected += token
+                if event.get("block_end", False):
+                    collected += "\n</think>"
+                    in_block = False
+            if event.get("done"):
+                # If still in a block, close it.
+                if in_block:
+                    collected += "\n</think>"
+                    in_block = False
+                break
+        await stream_task
+
+        # Remove any trailing closing </think> so it can be placed correctly
+        collected = collected.rstrip()
+        if collected.endswith("</think>"):
+            collected = collected[: -len("</think>")].rstrip()
+
+        # Build and return the complete JSON response.
+        # Now the final response will be wrapped with the intermediate thinking block
+        # and the final answer will follow.
         chat_response = ChatCompletionResponse(
             model=request.model,
             choices=[
                 ChoiceModel(
                     message=MessageModel(
-                        reasoning_content=aggregator.get_buffer(),
-                        content=final_text,
+                        reasoning_content=collected,
+                        content=collected,
                     )
                 )
             ],
         )
-        return chat_response.model_dump()
-
-    if request.stream:
-        # Fake streaming adds <think> tags for Chat Interfaces
-        async def single_chunk() -> AsyncGenerator[str, None]:
-            curr_response = build_response()
-            choice = curr_response["choices"][0]
-            message = choice["message"]
-            # Construct new content by merging reasoning and content
-            message["content"] = (
-                f"<think>\n{message['reasoning_content']}\n</think>\n{message['content']}"
-            )
-            yield json.dumps(curr_response)
-
-        return StreamingResponse(single_chunk(), media_type="application/json")
-    else:
-        return build_response()
+        return JSONResponse(content=chat_response.model_dump())
 
 
 @model_router.get("", response_description="Proxied JSON Response")
