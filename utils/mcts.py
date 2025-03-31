@@ -7,9 +7,10 @@ import math
 import re
 
 from utils.llm import LLMClient
+from utils.classes import ReasoningEffort
 
 
-# Default MCTS parameters
+# Default MCTS parameters (serving as a fallback)
 # Controls exploration vs exploitation trade-off in UCT formula
 # Higher values (>1) favor exploration of less-visited nodes
 # Default √2 (≈1.414) is theoretically optimal for many MCTS applications
@@ -18,17 +19,17 @@ EXPLORATION_WEIGHT = 1.414
 # Number of complete MCTS iterations to perform
 # Each iteration involves multiple simulations to build the search tree
 # Higher values allow more thorough search but increase computation time
-MAX_ITERATIONS = 2
+DEFAULT_MAX_ITERATIONS = 2
 
 # Number of simulations to run per iteration
 # Each simulation expands the tree and evaluates a new potential response
 # Higher values provide more accurate node value estimates
-MAX_SIMULATIONS = 2
+DEFAULT_MAX_SIMULATIONS = 2
 
 # Maximum number of child nodes allowed per parent
 # Limits branching factor of the tree to manage computational complexity
 # Lower values focus search but might miss potential good responses
-MAX_CHILDREN = 2
+DEFAULT_MAX_CHILDREN = 2
 
 
 class Node:
@@ -42,7 +43,7 @@ class Node:
         content: str,
         parent: Optional["Node"] = None,
         exploration_weight: float = EXPLORATION_WEIGHT,
-        max_children: int = MAX_CHILDREN,
+        max_children: int = DEFAULT_MAX_CHILDREN,
     ):
         self.id = "".join(random.choices("abcdefghijklmnopqrstuvwxyz", k=4))
         self.content = content
@@ -59,7 +60,7 @@ class Node:
         self.children.append(child)
 
     def fully_expanded(self) -> bool:
-        """Returns True if node has reached maximum allowed children."""
+        """Returns True if the node has reached the maximum allowed children."""
         return len(self.children) >= self.max_children
 
     def uct_value(self) -> float:
@@ -74,7 +75,7 @@ class Node:
         )
 
     def best_child(self) -> "Node":
-        """Returns child node with highest visit count recursively."""
+        """Returns the child node with the highest visit count recursively."""
         if not self.children:
             return self
         return max(self.children, key=lambda child: child.visits).best_child()
@@ -125,7 +126,7 @@ class MCTSPromptTemplates:
 
     initial_prompt = """
 <instruction>
-Provide a clear, accurate, and complete answer to the question below.
+Focus directly on the question by first explaining your thinking process step-by-step, then presenting your final answer clearly.
 </instruction>
 <question>
 {question}
@@ -134,7 +135,7 @@ Provide a clear, accurate, and complete answer to the question below.
 
     thoughts_prompt = """
 <instruction>
-In one sentence, provide a suggestion to improve the answer.
+This answer is an early draft and may contain errors; in one sentence, please suggest one improvement and note any issues or areas that could be enhanced.
 </instruction>
 <question>
 {question}
@@ -146,8 +147,7 @@ In one sentence, provide a suggestion to improve the answer.
 
     update_prompt = """
 <instruction>
-Revise the answer below addressing the critique.
-Return only the updated answer.
+Based on the critique provided, revise your previous answer to address all identified issues. Provide only the improved, corrected version of your answer.
 </instruction>
 <question>
 {question}
@@ -162,8 +162,7 @@ Return only the updated answer.
 
     eval_answer_prompt = """
 <instruction>
-Score how well the answer responds to the question on a scale of 1 to 10.
-Return a single number.
+Critically evaluate this answer for the given question from 1-10, considering accuracy, completeness, and relevance. Return only a number.
 </instruction>
 <question>
 {question}
@@ -182,17 +181,39 @@ class MCTSAgent:
 
     def __init__(
         self,
+        model: str,
+        question: str,
         root_content: str,
         llm_client: LLMClient,
-        question: str,
         event_emitter: Callable[[dict], Awaitable[None]],
-        model: str,
+        reasoning_effort: ReasoningEffort = ReasoningEffort.NORMAL,
     ):
-        self.root = Node(content=root_content)
+        self.model = model
         self.question = question
         self.llm_client = llm_client
         self.event_emitter = event_emitter
-        self.model = model
+        # Configure MCTS parameters based on the desired reasoning effort
+        if reasoning_effort == ReasoningEffort.NORMAL:
+            self.max_iterations = 2  # minimum 2 iterations
+            self.max_simulations = 2
+            self.max_children = 2
+        elif reasoning_effort == ReasoningEffort.MEDIUM:
+            self.max_iterations = 3
+            self.max_simulations = 3
+            self.max_children = 3
+        elif reasoning_effort == ReasoningEffort.HIGH:
+            self.max_iterations = 4
+            self.max_simulations = 4
+            self.max_children = 4
+        else:
+            # Fallback to normal if unrecognized effort
+            self.max_iterations = 2
+            self.max_simulations = 2
+            self.max_children = 2
+
+        # Initialize the root node with the agent's max_children setting
+        self.root = Node(content=root_content, max_children=self.max_children)
+        self.reasoning_effort = reasoning_effort
         self.iteration_responses = []  # List to store iteration details
 
     async def search(self) -> str:
@@ -223,10 +244,10 @@ class MCTSAgent:
         )
         await self.emit_iteration_update()
 
-        for i in range(1, MAX_ITERATIONS + 1):
-            await self.emit_status(f"Iteration {i}/{MAX_ITERATIONS}")
+        for i in range(1, self.max_iterations + 1):
+            await self.emit_status(f"Iteration {i}/{self.max_iterations}")
             iteration_responses = []
-            for _ in range(MAX_SIMULATIONS):
+            for _ in range(self.max_simulations):
                 leaf = await self.select(self.root)
                 if not leaf.fully_expanded():
                     child = await self.expand(leaf)
@@ -272,13 +293,13 @@ class MCTSAgent:
                 best_answer = current_node.content
 
         await self.emit_message(
-            f"\n\n---\n<details><summary>Best Answer:</summary>\n\n{best_answer}\n\n</details>"
+            f"\n\n---\n<details>\n<summary>Best Answer:</summary>\n\n{best_answer}\n\n</details>\n\n</think>\n"
         )
         return best_answer
 
     async def select(self, node: Node) -> Node:
         """
-        Selects promising node for expansion using UCT selection.
+        Selects a promising node for expansion using UCT selection.
         Returns leaf node for further exploration.
         """
         while node.fully_expanded() and node.children:
@@ -287,16 +308,17 @@ class MCTSAgent:
 
     async def expand(self, node: Node) -> Node:
         """
-        Creates new child node with improved content based on LLM suggestions.
-        Returns newly created child node.
+        Creates a new child node with improved content based on LLM suggestions.
+        Returns the newly created child node.
         """
         thought = await self.generate_thought(node.content)
         new_content = await self.update_approach(node.content, thought)
+        # Create child node using the configured max_children value
         child = Node(
             content=new_content,
             parent=node,
             exploration_weight=EXPLORATION_WEIGHT,
-            max_children=MAX_CHILDREN,
+            max_children=self.max_children,
         )
         node.add_child(child)
         return child
@@ -304,7 +326,7 @@ class MCTSAgent:
     async def simulate(self, node: Node) -> float:
         """
         Evaluates node's content quality using LLM scoring.
-        Returns numerical score for the response.
+        Returns a numerical score for the response.
         """
         return await self.evaluate_answer(node.content)
 
@@ -320,8 +342,8 @@ class MCTSAgent:
 
     async def generate_completion(self, prompt: str) -> str:
         """
-        Gets streaming completion from LLM for given prompt.
-        Returns accumulated response content.
+        Gets a streaming completion from the LLM for a given prompt.
+        Returns the accumulated response content.
         """
         messages = [{"role": "user", "content": prompt}]
         content = ""
@@ -334,8 +356,8 @@ class MCTSAgent:
 
     async def generate_thought(self, answer: str) -> str:
         """
-        Generates improvement suggestion for current answer using LLM.
-        Returns critique as string.
+        Generates an improvement suggestion for the current answer using LLM.
+        Returns the critique as a string.
         """
         prompt = MCTSPromptTemplates.thoughts_prompt.format(
             question=self.question, answer=answer
@@ -344,8 +366,8 @@ class MCTSAgent:
 
     async def update_approach(self, answer: str, critique: str) -> str:
         """
-        Revises answer based on provided critique using LLM.
-        Returns updated answer incorporating feedback.
+        Revises the answer based on the provided critique using LLM.
+        Returns the updated answer incorporating the feedback.
         """
         prompt = MCTSPromptTemplates.update_prompt.format(
             question=self.question, answer=answer, critique=critique
@@ -354,8 +376,8 @@ class MCTSAgent:
 
     async def evaluate_answer(self, answer: str) -> float:
         """
-        Scores answer quality using LLM evaluation.
-        Returns numerical score between 1-10.
+        Scores the answer quality using LLM evaluation.
+        Returns a numerical score between 1-10.
         """
         prompt = MCTSPromptTemplates.eval_answer_prompt.format(
             question=self.question, answer=answer
@@ -370,8 +392,8 @@ class MCTSAgent:
 
     async def emit_iteration_update(self):
         """
-        Sends tree visualization and iteration details to UI.
-        Updates progress display with current search state.
+        Sends a tree visualization and iteration details to the UI.
+        Updates the progress display with the current search state.
         """
         mermaid = "```mermaid\n" + self.root.get_mermaid_lines() + "\n```"
         iterations = ""
@@ -380,7 +402,7 @@ class MCTSAgent:
             for resp in itr["responses"]:
                 iterations += f"- Node `{resp['node_id']}`: Score `{resp['score']}`\n"
                 iterations += f"  - **Response**: {resp['content']}\n"
-        msg = f"## Intermediate Responses\n<details>\n<summary>Expand to View Intermediate Iterations</summary>\n\n{mermaid}\n{iterations}\n\n</details>\n"
+        msg = f"<think>\n\n<details>\n<summary>Expand to View Intermediate Iterations</summary>\n\n{mermaid}\n{iterations}\n\n</details>\n"
         await self.emit_replace(msg)
 
     async def emit_message(self, message: str):
