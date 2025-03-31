@@ -126,7 +126,7 @@ class MCTSPromptTemplates:
 
     initial_prompt = """
 <instruction>
-Provide a clear, accurate, and complete answer to the question below.
+Focus directly on the question by first explaining your thinking process step-by-step, then presenting your final answer clearly.
 </instruction>
 <question>
 {question}
@@ -135,7 +135,7 @@ Provide a clear, accurate, and complete answer to the question below.
 
     thoughts_prompt = """
 <instruction>
-In one sentence, provide a suggestion to improve the answer.
+This answer is an early draft and may contain errors; in one sentence, please suggest one improvement and note any issues or areas that could be enhanced.
 </instruction>
 <question>
 {question}
@@ -147,8 +147,7 @@ In one sentence, provide a suggestion to improve the answer.
 
     update_prompt = """
 <instruction>
-Revise the answer below addressing the critique.
-Return only the updated answer.
+Based on the critique provided, revise your previous answer to address all identified issues. Provide only the improved, corrected version of your answer.
 </instruction>
 <question>
 {question}
@@ -163,8 +162,7 @@ Return only the updated answer.
 
     eval_answer_prompt = """
 <instruction>
-Score how well the answer responds to the question on a scale of 1 to 10.
-Return a single number.
+Critically evaluate this answer for the given question from 1-10, considering accuracy, completeness, and relevance. Return only a number.
 </instruction>
 <question>
 {question}

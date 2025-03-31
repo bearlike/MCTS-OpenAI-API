@@ -1,8 +1,12 @@
 # MCTS OpenAI API Wrapper
 
-![Comparison of Response](docs/screenshot_1.png)
+[![Packages](https://img.shields.io/badge/Docker-ghcr.io%2Fbearlike%2Fmcts%E2%80%94openai%E2%80%94api%3Alatest-blue?logo=docker)](https://github.com/bearlike/mcts-openai-api/pkgs/container/mcts-openai-api)
 
-Monte Carlo Tree Search (MCTS) is a method that uses extra compute to explore different candidate responses before selecting a final answer. It works by building a tree of options and running multiple iterations. This is similar in concept to inference scaling, but here a model generates several output candidates, reitereates and picks the best one. Every incoming request is wrapped with a MCTS pipeline to iteratively refine language model outputs.
+<p align="center">
+   <img src="docs/screenshot_1.png" alt="Comparison of Response" style="height: 512px;">
+</p>
+
+Monte Carlo Tree Search (MCTS) is a heuristic search algorithm that systematically explores a tree of candidate outputs to refine language model responses. Upon receiving an input, the MCTS pipeline generates multiple candidate answers through iterative simulations. In each iteration, the algorithm evaluates and updates these candidates based on feedback, propagating the best scores upward. This process enhances inference by scaling the model's reasoning capabilities, enabling the selection of the optimal response from multiple candidates.
 
 ## Overview
 
@@ -13,16 +17,37 @@ This FastAPI server exposes two endpoints:
 | POST   | `/v1/chat/completions` | Accepts chat completion requests. The call is wrapped with an MCTS refinement |
 | GET    | `/v1/models`           | Proxies a request to the underlying LLM provider’s models endpoint            |
 
-During a chat completion call, the server executes an MCTS pipeline that generates intermediate updates (including a Mermaid diagram and iteration details). All these intermediate responses are aggregated into a single `<details>` block, and the final answer is appended at the end, following a consistent and structured markdown template.
+During a chat completion call, the server runs an MCTS pipeline that produces iterative updates. Each update includes a dynamic Mermaid diagram and detailed logs of the iteration process. All intermediate responses are combined into a single `<details>` block. Finally, the final answer is appended at the end using a consistent, structured markdown template.
 
 ## Getting Started
 
-### Prerequisites
+### Deploy using Docker (Recommended) 🐳
 
-- Python 3.8+
+1. Create a `secrets.env` with the variables from the `docker-compose.yml` file.
+2. Use this command to pull the image and deploy the application with Docker Compose:
+
+    ```bash
+    docker pull ghcr.io/bearlike/mcts-openai-api:latest
+    docker compose --env-file secrets.env up -d
+
+    # Go to http://hostname:8426/docs for Swagger API docs and test the endpoints.
+    ```
+
+3. Use `http://hostname:8426/v1` as the OpenAI Base URL with any API key in any compatible application.
+
+---
+
+<details>
+<summary>Expand to view <code>Manual Installation</code></summary>
+
+### Manual Installation
+
+#### Prerequisites
+
+- Python 3.13+
 - [Poetry](https://python-poetry.org) for dependency management
 
-### Setup
+#### Setup
 
 1. **Clone the repository:**
 
@@ -57,6 +82,11 @@ During a chat completion call, the server executes an MCTS pipeline that generat
    # Visit http://mcts-server:8000/docs to view the Swagger API documentation
    uvicorn main:app --reload
    ```
+
+
+</details>
+
+---
 
 ## Testing the Server
 
