@@ -186,14 +186,14 @@ class MCTSAgent:
         root_content: str,
         llm_client: LLMClient,
         event_emitter: Callable[[dict], Awaitable[None]],
-        reasoning_effort: ReasoningEffort = ReasoningEffort.NORMAL,
+        reasoning_effort: ReasoningEffort = ReasoningEffort.LOW,
     ):
         self.model = model
         self.question = question
         self.llm_client = llm_client
         self.event_emitter = event_emitter
         # Configure MCTS parameters based on the desired reasoning effort
-        if reasoning_effort == ReasoningEffort.NORMAL:
+        if reasoning_effort == ReasoningEffort.LOW:
             self.max_iterations = 2  # minimum 2 iterations
             self.max_simulations = 2
             self.max_children = 2

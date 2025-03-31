@@ -108,7 +108,8 @@ curl -X 'POST' \
     }
   ],
   "max_tokens": 1024,
-  "temperature": 0.5
+  "temperature": 0.5,
+  "reasoning_effort": "low"
 }' | jq -r '.choices[0].message.content'
 ```
 
@@ -130,7 +131,7 @@ Wraps a chat completion request in an MCTS pipeline that refines the answer by g
 | temperature      | number (optional)  | `0.7`    | Controls the randomness of the output.                                                                      |
 | stream           | boolean (optional) | `false`  | If false, aggregates streamed responses and returns on completion. If true, streams intermediate responses. |
 | reasoning_effort | string (optional)  | `normal` | Controls the `MCTSAgent` search settings:                                                                   |
-| =>               | =>                 | =>       | **`normal`** - 2 iterations, 2 simulations per iteration, and 2 child nodes per parent (default).           |
+| =>               | =>                 | =>       | **`low`** - 2 iterations, 2 simulations per iteration, and 2 child nodes per parent (default).           |
 | =>               | =>                 | =>       | `medium` - 3 iterations, 3 simulations per iteration, and 3 child nodes per parent.                         |
 | =>               | =>                 | =>       | `high` - 4 iterations, 4 simulations per iteration, and 4 child nodes per parent.                           |
 

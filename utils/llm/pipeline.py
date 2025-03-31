@@ -25,19 +25,34 @@ class Pipeline:
             raise HTTPException(status_code=400, detail="No messages provided.")
 
         # * Monkey merging latest and previous messages
-        latest = request_body.messages[-1].content.strip()
-        previous = "\n".join(
-            f"{msg.role.capitalize()}: {msg.content}"
-            for msg in request_body.messages[:-1]
+        system_messages = "\n".join(
+            msg.content + "\n"
+            for msg in request_body.messages
+            if msg.role.lower() in ["system", "developer"]
         )
+        rest_messages = [
+            msg
+            for msg in request_body.messages
+            if msg.role.lower() not in ["system", "developer"]
+        ]
+
+        latest = rest_messages[-1].content.strip()
+        previous = "\n".join(
+            f"{msg.role.capitalize()}: {msg.content}" for msg in rest_messages[:-1]
+        )
+
         question = MCTSPromptTemplates.thread_prompt.format(
             question=latest, messages=previous
         )
-
         initial_prompt = MCTSPromptTemplates.initial_prompt.format(question=question)
-        init_reply = await self.llm_client.get_completion(
-            [{"role": "user", "content": initial_prompt}], model
-        )
+        messages = [{"role": "user", "content": initial_prompt}]
+
+        # Check system_messages (not messages) before inserting.
+        if system_messages.strip():
+            logger.debug(f"Injecting system prompt - {system_messages}")
+            messages.insert(0, {"role": "system", "content": system_messages})
+
+        init_reply = await self.llm_client.get_completion(messages, model)
         mcts_agent = MCTSAgent(
             root_content=init_reply,
             llm_client=self.llm_client,
