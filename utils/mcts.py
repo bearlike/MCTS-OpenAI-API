@@ -7,6 +7,7 @@ import math
 import re
 
 from utils.llm import LLMClient
+from utils.classes import ReasoningEffort
 
 
 # Default MCTS parameters
@@ -182,17 +183,19 @@ class MCTSAgent:
 
     def __init__(
         self,
+        model: str,
+        question: str,
         root_content: str,
         llm_client: LLMClient,
-        question: str,
         event_emitter: Callable[[dict], Awaitable[None]],
-        model: str,
+        reasoning_effort: ReasoningEffort = ReasoningEffort.NORMAL,
     ):
-        self.root = Node(content=root_content)
+        self.model = model
         self.question = question
         self.llm_client = llm_client
         self.event_emitter = event_emitter
-        self.model = model
+        self.root = Node(content=root_content)
+        self.reasoning_effort = reasoning_effort
         self.iteration_responses = []  # List to store iteration details
 
     async def search(self) -> str:

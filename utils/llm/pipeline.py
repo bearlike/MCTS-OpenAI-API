@@ -11,6 +11,7 @@ from utils.llm import LLMClient
 
 class Pipeline:
     """Pipeline: Wraps an incoming request into the MCTS process"""
+
     def __init__(self, *args, **kwargs):
         self.llm_client = LLMClient(*args, **kwargs)
 
@@ -42,6 +43,7 @@ class Pipeline:
             llm_client=self.llm_client,
             question=question,
             event_emitter=emitter,
+            reasoning_effort=request_body.reasoning_effort,
             model=model,
         )
         final_answer = await mcts_agent.search()

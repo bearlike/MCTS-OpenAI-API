@@ -1,7 +1,14 @@
 #!/usr/bin/env python3
 # Pydantic Models for Chat Completion API
+from enum import Enum
 from pydantic import BaseModel
 from typing import List, Optional
+
+
+class ReasoningEffort(Enum):
+    NORMAL = "normal"
+    MEDIUM = "medium"
+    HIGH = "high"
 
 
 class ChatMessage(BaseModel):
@@ -15,3 +22,4 @@ class ChatCompletionRequest(BaseModel):
     max_tokens: Optional[int] = 512
     temperature: Optional[float] = 0.1
     stream: Optional[bool] = False
+    reasoning_effort: Optional[ReasoningEffort] = ReasoningEffort.NORMAL
