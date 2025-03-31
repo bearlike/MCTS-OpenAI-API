@@ -19,7 +19,7 @@ class ChatMessage(BaseModel):
 class ChatCompletionRequest(BaseModel):
     model: str  # e.g.: "gpt-4o-mini"
     messages: List[ChatMessage]
-    max_tokens: Optional[int] = 512
-    temperature: Optional[float] = 0.1
+    max_tokens: Optional[int] = None
+    temperature: Optional[float] = 0.7
     stream: Optional[bool] = False
     reasoning_effort: Optional[ReasoningEffort] = ReasoningEffort.NORMAL

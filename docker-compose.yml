@@ -1,8 +1,7 @@
 services:
   mcts-api-server:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    container_name: mcts-api-server
+    image: "ghcr.io/bearlike/mcts-openai-api:latest"
     ports:
       - "8336:8000" # Fast API Server
     environment:

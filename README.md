@@ -9,9 +9,9 @@ Monte Carlo Tree Search (MCTS) is a method that uses extra compute to explore di
 This FastAPI server exposes two endpoints:
 
 | Method | Endpoint               | Description                                                                   |
-|--------|------------------------|-------------------------------------------------------------------------------|
+| ------ | ---------------------- | ----------------------------------------------------------------------------- |
 | POST   | `/v1/chat/completions` | Accepts chat completion requests. The call is wrapped with an MCTS refinement |
-| GET    | `/v1/models`           | Proxies a request to the underlying LLM provider’s models endpoint             |
+| GET    | `/v1/models`           | Proxies a request to the underlying LLM provider’s models endpoint            |
 
 During a chat completion call, the server executes an MCTS pipeline that generates intermediate updates (including a Mermaid diagram and iteration details). All these intermediate responses are aggregated into a single `<details>` block, and the final answer is appended at the end, following a consistent and structured markdown template.
 
@@ -54,7 +54,7 @@ During a chat completion call, the server executes an MCTS pipeline that generat
    Start the FastAPI server with Uvicorn:
 
    ```bash
-   # Visit http://server-ip:8000/docs to view the Swagger API documentation
+   # Visit http://mcts-server:8000/docs to view the Swagger API documentation
    uvicorn main:app --reload
    ```
 
@@ -88,23 +88,27 @@ This request will return a JSON response with the aggregated intermediate respon
 
 ## Endpoints
 
-### POST /v1/chat/completions
+### POST `/v1/chat/completions`
 
-- **Description:**
-  Wraps a chat completion request in an MCTS pipeline that refines the answer by generating intermediate updates and a final response.
+Wraps a chat completion request in an MCTS pipeline that refines the answer by generating intermediate updates and a final response.
 
-- **Request Body Parameters:**
+| Parameter        | Data Type          | Default  | Description                                                                                                 |
+| ---------------- | ------------------ | -------- | ----------------------------------------------------------------------------------------------------------- |
+| model            | string (required)  | N/A      | e.g., `gpt-4o-mini`.                                                                                        |
+| messages         | array (required)   | N/A      | Array of chat messages with `role` and `content`.                                                           |
+| max_tokens       | number (optional)  | N/A      | Maximum tokens allowed in each step response.                                                               |
+| temperature      | number (optional)  | `0.7`    | Controls the randomness of the output.                                                                      |
+| stream           | boolean (optional) | `false`  | If false, aggregates streamed responses and returns on completion. If true, streams intermediate responses. |
+| reasoning_effort | string (optional)  | `normal` | Controls the `MCTSAgent` search settings:                                                                   |
+| =>               | =>                 | =>       | **`normal`** - 2 iterations, 2 simulations per iteration, and 2 child nodes per parent (default).           |
+| =>               | =>                 | =>       | `medium` - 3 iterations, 3 simulations per iteration, and 3 child nodes per parent.                         |
+| =>               | =>                 | =>       | `high` - 4 iterations, 4 simulations per iteration, and 4 child nodes per parent.                           |
 
-    - `model`: string (e.g., `"gpt-4o-mini"`)
-    - `messages`: an array of chat messages (with `role` and `content` properties)
-    - `max_tokens`: (optional) number
-    - `temperature`: (optional) number
-    - `stream`: (optional) boolean (if enabled, aggregates intermediate responses with the final answer in one JSON response)
+### GET `/v1/models`
 
-### GET /v1/models
+Proxies requests to list available models from the underlying LLM provider using the `OPENAI_API_BASE_URL`.
 
-- **Description:**
-  Proxies requests to list available models from the underlying LLM provider using the `OPENAI_API_BASE_URL`.
+---
 
 ## License
 
