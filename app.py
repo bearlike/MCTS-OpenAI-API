@@ -50,12 +50,12 @@ class EventAggregator:
 
     async def __call__(self, event: dict):
         if event.get("type") == "replace":
-            self.buffer = event.get("data", {}).get("content", "")
+            self.buffer = event.get("data", {}).get("reasoning_content", "")
         else:
-            self.buffer += event.get("data", {}).get("content", "")
+            self.buffer += event.get("data", {}).get("reasoning_content", "")
 
     def get_buffer(self) -> str:
-        return self.buffer
+        return self.buffer.strip()
 
 
 # ----------------------------------------------------------------------
@@ -64,7 +64,7 @@ class EventAggregator:
 app = FastAPI(
     title="OpenAI Compatible API with MCTS",
     description="Wraps LLM invocations with Monte Carlo Tree Search refinement",
-    version="0.0.1",
+    version="0.0.91",
 )
 
 app.add_middleware(
@@ -84,13 +84,26 @@ async def chat_completions(request: ChatCompletionRequest):
     if request.stream:
         aggregator = EventAggregator()
         final_text = await pipeline.run(request, aggregator)
-        full_message = aggregator.get_buffer() + "\n" + final_text
         final_response = {
             "id": "mcts_response",
             "object": "chat.completion",
             "created": time.time(),
             "model": request.model,
-            "choices": [{"message": {"role": "assistant", "content": full_message}}],
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "reasoning_content": aggregator.get_buffer(),
+                        "thinking_blocks": [
+                            {
+                                "type": "thinking",
+                                "thinking": aggregator.get_buffer(),
+                            },
+                        ],
+                        "content": final_text,
+                    }
+                }
+            ],
         }
 
         # Return a single JSON chunk with mimetype application/json
@@ -101,13 +114,28 @@ async def chat_completions(request: ChatCompletionRequest):
     else:
         aggregator = EventAggregator()
         final_text = await pipeline.run(request, aggregator)
-        full_message = aggregator.get_buffer() + "\n" + final_text
         return {
             "id": "mcts_response",
             "object": "chat.completion",
             "created": time.time(),
             "model": request.model,
-            "choices": [{"message": {"role": "assistant", "content": full_message}}],
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "reasoning_content": aggregator.get_buffer(),
+                        "thinking_blocks": [
+                            {
+                                "type": "thinking",
+                                "thinking": aggregator.get_buffer(),
+                            }
+                        ],
+                        "content": final_text,
+                    },
+                }
+            ],
         }
 
 

@@ -293,7 +293,7 @@ class MCTSAgent:
                 best_answer = current_node.content
 
         await self.emit_message(
-            f"\n\n---\n<details>\n<summary>Best Answer:</summary>\n\n{best_answer}\n\n</details>\n\n</think>\n"
+            f"\n\n---\n<details>\n<summary>Best Answer:</summary>\n\n{best_answer}\n\n</details>"
         )
         return best_answer
 
@@ -402,14 +402,20 @@ class MCTSAgent:
             for resp in itr["responses"]:
                 iterations += f"- Node `{resp['node_id']}`: Score `{resp['score']}`\n"
                 iterations += f"  - **Response**: {resp['content']}\n"
-        msg = f"<think>\n\n<details>\n<summary>Expand to View Intermediate Iterations</summary>\n\n{mermaid}\n{iterations}\n\n</details>\n"
+
+        # msg = "<think>\n\n"
+        msg = f"<details>\n<summary>Expand to View Intermediate Iterations</summary>\n\n{mermaid}\n{iterations}\n\n</details>\n"
         await self.emit_replace(msg)
 
     async def emit_message(self, message: str):
-        await self.event_emitter({"type": "message", "data": {"content": message}})
+        await self.event_emitter(
+            {"type": "message", "data": {"reasoning_content": message}}
+        )
 
     async def emit_status(self, message: str):
         await self.event_emitter({"type": "status", "data": {"description": message}})
 
     async def emit_replace(self, content: str):
-        await self.event_emitter({"type": "replace", "data": {"content": content}})
+        await self.event_emitter(
+            {"type": "replace", "data": {"reasoning_content": content}}
+        )
