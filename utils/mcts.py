@@ -10,13 +10,33 @@ from utils.llm import LLMClient
 
 
 # Default MCTS parameters
+# Controls exploration vs exploitation trade-off in UCT formula
+# Higher values (>1) favor exploration of less-visited nodes
+# Default √2 (≈1.414) is theoretically optimal for many MCTS applications
 EXPLORATION_WEIGHT = 1.414
+
+# Number of complete MCTS iterations to perform
+# Each iteration involves multiple simulations to build the search tree
+# Higher values allow more thorough search but increase computation time
 MAX_ITERATIONS = 2
+
+# Number of simulations to run per iteration
+# Each simulation expands the tree and evaluates a new potential response
+# Higher values provide more accurate node value estimates
 MAX_SIMULATIONS = 2
+
+# Maximum number of child nodes allowed per parent
+# Limits branching factor of the tree to manage computational complexity
+# Lower values focus search but might miss potential good responses
 MAX_CHILDREN = 2
 
 
 class Node:
+    """
+    Represents a node in the Monte Carlo Tree Search.
+    Tracks visit counts, value estimates, and maintains parent-child relationships.
+    """
+
     def __init__(
         self,
         content: str,
@@ -34,13 +54,19 @@ class Node:
         self.value = 0.0
 
     def add_child(self, child: "Node"):
+        """Adds a child node and sets its parent reference."""
         child.parent = self
         self.children.append(child)
 
     def fully_expanded(self) -> bool:
+        """Returns True if node has reached maximum allowed children."""
         return len(self.children) >= self.max_children
 
     def uct_value(self) -> float:
+        """
+        Calculates Upper Confidence Bound for Trees (UCT) value.
+        Balances exploration and exploitation.
+        """
         if self.visits == 0:
             return float("inf")
         return self.value / self.visits + self.exploration_weight * math.sqrt(
@@ -48,14 +74,18 @@ class Node:
         )
 
     def best_child(self) -> "Node":
+        """Returns child node with highest visit count recursively."""
         if not self.children:
             return self
         return max(self.children, key=lambda child: child.visits).best_child()
 
     def get_mermaid_lines(self) -> str:
         """
+        Generates Mermaid diagram markup representing the tree structure.
+        Includes node IDs, visit counts, and content previews.
+
         Produce a valid Mermaid diagram:
-         - A line "graph TD" is first.
+         - A line `graph TD` is first.
          - Then all node definitions are inserted, one per line (properly quoted).
          - Then an empty line followed by connection definitions, one per line.
         """
@@ -80,6 +110,11 @@ class Node:
 
 
 class MCTSPromptTemplates:
+    """
+    Collection of prompt templates for different MCTS operations.
+    Includes templates for initial prompts, thoughts generation, updates, and evaluation.
+    """
+
     thread_prompt = """
 ## Latest Question
 {question}
@@ -140,6 +175,11 @@ Return a single number.
 
 
 class MCTSAgent:
+    """
+    Implements Monte Carlo Tree Search for iterative response refinement using LLMs.
+    Manages tree exploration, evaluation, and response generation.
+    """
+
     def __init__(
         self,
         root_content: str,
@@ -156,6 +196,10 @@ class MCTSAgent:
         self.iteration_responses = []  # List to store iteration details
 
     async def search(self) -> str:
+        """
+        Executes MCTS algorithm to find optimal response.
+        Returns best answer found after specified iterations.
+        """
         best_answer = None
         best_score = float("-inf")
         processed_ids = set()
@@ -227,15 +271,25 @@ class MCTSAgent:
                 best_score = current_score
                 best_answer = current_node.content
 
-        await self.emit_message(f"\n\n---\n## Best Answer:\n{best_answer}")
+        await self.emit_message(
+            f"\n\n---\n<details><summary>Best Answer:</summary>\n\n{best_answer}\n\n</details>"
+        )
         return best_answer
 
     async def select(self, node: Node) -> Node:
+        """
+        Selects promising node for expansion using UCT selection.
+        Returns leaf node for further exploration.
+        """
         while node.fully_expanded() and node.children:
             node = max(node.children, key=lambda n: n.uct_value())
         return node
 
     async def expand(self, node: Node) -> Node:
+        """
+        Creates new child node with improved content based on LLM suggestions.
+        Returns newly created child node.
+        """
         thought = await self.generate_thought(node.content)
         new_content = await self.update_approach(node.content, thought)
         child = Node(
@@ -248,15 +302,27 @@ class MCTSAgent:
         return child
 
     async def simulate(self, node: Node) -> float:
+        """
+        Evaluates node's content quality using LLM scoring.
+        Returns numerical score for the response.
+        """
         return await self.evaluate_answer(node.content)
 
     def backpropagate(self, node: Node, score: float):
+        """
+        Updates visit counts and value estimates up the tree.
+        Propagates simulation results to ancestor nodes.
+        """
         while node:
             node.visits += 1
             node.value += score
             node = node.parent
 
     async def generate_completion(self, prompt: str) -> str:
+        """
+        Gets streaming completion from LLM for given prompt.
+        Returns accumulated response content.
+        """
         messages = [{"role": "user", "content": prompt}]
         content = ""
         async for token in self.llm_client.get_streaming_completion(
@@ -267,18 +333,30 @@ class MCTSAgent:
         return content
 
     async def generate_thought(self, answer: str) -> str:
+        """
+        Generates improvement suggestion for current answer using LLM.
+        Returns critique as string.
+        """
         prompt = MCTSPromptTemplates.thoughts_prompt.format(
             question=self.question, answer=answer
         )
         return await self.generate_completion(prompt)
 
     async def update_approach(self, answer: str, critique: str) -> str:
+        """
+        Revises answer based on provided critique using LLM.
+        Returns updated answer incorporating feedback.
+        """
         prompt = MCTSPromptTemplates.update_prompt.format(
             question=self.question, answer=answer, critique=critique
         )
         return await self.generate_completion(prompt)
 
     async def evaluate_answer(self, answer: str) -> float:
+        """
+        Scores answer quality using LLM evaluation.
+        Returns numerical score between 1-10.
+        """
         prompt = MCTSPromptTemplates.eval_answer_prompt.format(
             question=self.question, answer=answer
         )
@@ -291,6 +369,10 @@ class MCTSAgent:
             return 0
 
     async def emit_iteration_update(self):
+        """
+        Sends tree visualization and iteration details to UI.
+        Updates progress display with current search state.
+        """
         mermaid = "```mermaid\n" + self.root.get_mermaid_lines() + "\n```"
         iterations = ""
         for itr in self.iteration_responses:

@@ -9,10 +9,8 @@ from utils.classes import ChatCompletionRequest
 from utils.llm import LLMClient
 
 
-# ----------------------------------------------------------------------
-# Pipeline: Wraps an incoming request into the MCTS process
-# ----------------------------------------------------------------------
 class Pipeline:
+    """Pipeline: Wraps an incoming request into the MCTS process"""
     def __init__(self, *args, **kwargs):
         self.llm_client = LLMClient(*args, **kwargs)
 
@@ -24,6 +22,8 @@ class Pipeline:
         model = request_body.model
         if not request_body.messages:
             raise HTTPException(status_code=400, detail="No messages provided.")
+
+        # * Monkey merging latest and previous messages
         latest = request_body.messages[-1].content.strip()
         previous = "\n".join(
             f"{msg.role.capitalize()}: {msg.content}"
@@ -32,6 +32,7 @@ class Pipeline:
         question = MCTSPromptTemplates.thread_prompt.format(
             question=latest, messages=previous
         )
+
         initial_prompt = MCTSPromptTemplates.initial_prompt.format(question=question)
         init_reply = await self.llm_client.get_completion(
             [{"role": "user", "content": initial_prompt}], model
