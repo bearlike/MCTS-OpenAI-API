@@ -63,4 +63,6 @@ COPY scripts/entrypoint.sh /entrypoint.sh
 
 EXPOSE 8000
 RUN chmod +x /entrypoint.sh
+
+LABEL org.opencontainers.image.source https://github.com/bearlike/mcts-openai-api
 ENTRYPOINT ["/entrypoint.sh"]
