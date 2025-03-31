@@ -404,7 +404,7 @@ class MCTSAgent:
                 iterations += f"  - **Response**: {resp['content']}\n"
 
         # msg = "<think>\n\n"
-        msg = f"<details>\n<summary>Expand to View Intermediate Iterations</summary>\n\n{mermaid}\n{iterations}\n\n</details>\n"
+        msg = f"\n<details>\n\n<summary>Expand to View Intermediate Iterations</summary>\n\n{mermaid}\n{iterations}\n\n</details>\n\n"
         await self.emit_replace(msg)
 
     async def emit_message(self, message: str):

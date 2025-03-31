@@ -15,6 +15,7 @@ class ReasoningEffort(Enum):
     - `medium` - 3 iterations, 3 simulations per iteration, and 3 child nodes per parent.
     - `high` - 4 iterations, 4 simulations per iteration, and 4 child nodes per parent.
     """
+
     LOW = "low"
     MEDIUM = "medium"
     HIGH = "high"
@@ -26,17 +27,20 @@ class ChatMessage(BaseModel):
 
 
 class ChatCompletionRequest(BaseModel):
-    """Creates a model response for the given chat conversation.
-    """
+    """Creates a model response for the given chat conversation."""
+
     model: str = Field(..., description="The model used for the chat completion.")
     messages: List[ChatMessage]
     max_tokens: Optional[int] = Field(
-        ...,
+        None,
         description="The maximum number of tokens that can be generated in the chat completion.",
     )
     temperature: Optional[float] = 0.7
     stream: Optional[bool] = False
-    reasoning_effort: Optional[ReasoningEffort] = Field(ReasoningEffort.LOW, description="Constrains effort on reasoning. Currently supported values are `low`, `medium`, and `high`.")
+    reasoning_effort: Optional[ReasoningEffort] = Field(
+        ReasoningEffort.LOW,
+        description="Constrains effort on reasoning. Currently supported values are `low`, `medium`, and `high`.",
+    )
 
 
 class ThinkingBlock(BaseModel):
@@ -109,8 +113,8 @@ class ChoiceModel(BaseModel):
 
 
 class ChatCompletionResponse(BaseModel):
-    """Represents a chat completion response returned by model, based on the provided input.
-    """
+    """Represents a chat completion response returned by model, based on the provided input."""
+
     id: str = Field(
         default="mcts_response",
         description="A unique identifier for the chat completion.",

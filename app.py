@@ -106,7 +106,7 @@ async def chat_completions(request: ChatCompletionRequest):
     - `dict` or `StreamingResponse`: A JSON response with the generated chat
         completion, either as a single response or streamed chunks.
     """
-
+    logger.debug(f"Incoming request - {request}")
     aggregator = EventAggregator()
     final_text = await pipeline.run(request, aggregator)
 
@@ -125,9 +125,16 @@ async def chat_completions(request: ChatCompletionRequest):
         return chat_response.model_dump()
 
     if request.stream:
-        # Fake streaming
+        # Fake streaming adds <think> tags for Chat Interfaces
         async def single_chunk() -> AsyncGenerator[str, None]:
-            yield json.dumps(build_response())
+            curr_response = build_response()
+            choice = curr_response["choices"][0]
+            message = choice["message"]
+            # Construct new content by merging reasoning and content
+            message["content"] = (
+                f"<think>\n{message['reasoning_content']}\n</think>\n{message['content']}"
+            )
+            yield json.dumps(curr_response)
 
         return StreamingResponse(single_chunk(), media_type="application/json")
     else:
