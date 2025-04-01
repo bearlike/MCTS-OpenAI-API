@@ -15,40 +15,79 @@ class Pipeline:
     def __init__(self, *args, **kwargs):
         self.llm_client = LLMClient(*args, **kwargs)
 
-    async def run(
+    async def run_stream(
         self,
-        request_body: ChatCompletionRequest,
+        request: ChatCompletionRequest,
         emitter: Callable[[dict], Awaitable[None]],
-    ) -> str:
-        model = request_body.model
-        if not request_body.messages:
+    ) -> None:
+        model = request.model
+        if not request.messages:
             raise HTTPException(status_code=400, detail="No messages provided.")
 
-        # * Monkey merging latest and previous messages
-        latest = request_body.messages[-1].content.strip()
-        previous = "\n".join(
-            f"{msg.role.capitalize()}: {msg.content}"
-            for msg in request_body.messages[:-1]
+        # Merge system and conversation messages.
+        system_messages = "\n".join(
+            msg.content + "\n"
+            for msg in request.messages
+            if msg.role.lower() in ["system", "developer"]
         )
+        rest_messages = [
+            msg
+            for msg in request.messages
+            if msg.role.lower() not in ["system", "developer"]
+        ]
+
+        latest = rest_messages[-1].content.strip()
+        previous = "\n".join(
+            f"{msg.role.capitalize()}: {msg.content}" for msg in rest_messages[:-1]
+        )
+
         question = MCTSPromptTemplates.thread_prompt.format(
             question=latest, messages=previous
         )
-
         initial_prompt = MCTSPromptTemplates.initial_prompt.format(question=question)
-        init_reply = await self.llm_client.get_completion(
-            [{"role": "user", "content": initial_prompt}], model
-        )
+        messages = [{"role": "user", "content": initial_prompt}]
+
+        if system_messages.strip():
+            logger.debug(f"Injecting system prompt - {system_messages}")
+            messages.insert(0, {"role": "system", "content": system_messages})
+
+        # Get the initial reply from the LLM.
+        init_reply = await self.llm_client.get_completion(messages, model)
         mcts_agent = MCTSAgent(
             root_content=init_reply,
             llm_client=self.llm_client,
             question=question,
             event_emitter=emitter,
-            reasoning_effort=request_body.reasoning_effort,
+            reasoning_effort=request.reasoning_effort,
             model=model,
         )
+
         final_answer = await mcts_agent.search()
+
         final_mermaid = (
             "\n```mermaid\n" + mcts_agent.root.get_mermaid_lines() + "\n```\n"
         )
-        response_message = f"{final_mermaid}\n## Final Response\n{final_answer}"
-        return response_message
+        # Build the final response message
+        # (note: the final answer is _not_ wrapped in a <think> block).
+        final_response = f"{final_mermaid}\n## Final Response\n{final_answer}"
+
+        # Emit the closing tag alone.
+        await emitter(
+            {
+                "type": "message",
+                "data": {"reasoning_content": "\n</think>"},
+            }
+        )
+
+        # Then emit the final response message.
+        await emitter(
+            {
+                "type": "message",
+                "data": {
+                    "reasoning_content": final_response,
+                    "content": final_response,
+                },
+                "done": True,
+                "final": True,
+            }
+        )

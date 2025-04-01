@@ -11,19 +11,25 @@ refinement process. Intermediate updates (Mermaid diagram and iteration details)
 are accumulated in a single <details> block and then returned together with the final answer.
 """
 
-from typing import AsyncGenerator
-import time
 import json
 import os
+import asyncio
 
 from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi import FastAPI, HTTPException, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi import FastAPI, HTTPException
 from dotenv import load_dotenv
 from loguru import logger
+import uvicorn
 import httpx
 
-from utils.classes import ChatCompletionRequest
+from utils.classes import (
+    ChatCompletionRequest,
+    ChatCompletionResponse,
+    CONTACT_US_MAP,
+    MessageModel,
+    ChoiceModel,
+)
 from utils.llm.pipeline import Pipeline
 
 load_dotenv()
@@ -40,33 +46,17 @@ if OPENAI_API_KEY is None:
 
 logger.info(f"Using OpenAI API Base URL: {OPENAI_API_BASE_URL}")
 
-
-# ----------------------------------------------------------------------
-# Event Aggregator: For final message assembly
-# ----------------------------------------------------------------------
-class EventAggregator:
-    def __init__(self):
-        self.buffer = ""
-
-    async def __call__(self, event: dict):
-        if event.get("type") == "replace":
-            self.buffer = event.get("data", {}).get("content", "")
-        else:
-            self.buffer += event.get("data", {}).get("content", "")
-
-    def get_buffer(self) -> str:
-        return self.buffer
-
-
 # ----------------------------------------------------------------------
 # FastAPI App and Endpoints
 # ----------------------------------------------------------------------
 app = FastAPI(
     title="OpenAI Compatible API with MCTS",
     description="Wraps LLM invocations with Monte Carlo Tree Search refinement",
-    version="0.0.1",
+    version="0.0.91",
+    root_path="/v1",
+    contact=CONTACT_US_MAP,
 )
-
+# CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -74,45 +64,149 @@ app.add_middleware(
     allow_headers=["*"],
     allow_credentials=True,
 )
+# Defining routers
+model_router = APIRouter(prefix="/models", tags=["Model Management"])
+chat_router = APIRouter(prefix="/chat", tags=["Chat Completions"])
+
 pipeline = Pipeline(
     openai_api_base_url=OPENAI_API_BASE_URL, openai_api_key=OPENAI_API_KEY
 )
 
 
-@app.post("/v1/chat/completions")
+# Helper function to generate streaming responses.
+async def streaming_event_generator(
+    event_queue: asyncio.Queue, stream_task: asyncio.Task
+):
+    # Emit the opening <think> block
+    opening_event = {"choices": [{"delta": {"content": "<think>\n"}}]}
+    yield f"data: {json.dumps(opening_event)}\n\n"
+    thinking_closed = False
+
+    while True:
+        try:
+            event = await asyncio.wait_for(event_queue.get(), timeout=30)
+        except asyncio.TimeoutError:
+            break
+
+        if event.get("type") in ["message", "replace"]:
+            if event.get("final"):
+                if not thinking_closed:
+                    closing_event = {"choices": [{"delta": {"content": "\n</think>"}}]}
+                    yield f"data: {json.dumps(closing_event)}\n\n"
+                    thinking_closed = True
+                # Send the final answer separately.
+                chunk = {
+                    "choices": [
+                        {
+                            "delta": {
+                                "content": event["data"].get("reasoning_content", "")
+                            }
+                        }
+                    ]
+                }
+                yield f"data: {json.dumps(chunk)}\n\n"
+            else:
+                # For intermediate tokens, strip accidental <think> markers.
+                token = event["data"].get("reasoning_content", "")
+                token = token.replace("<think>\n", "").replace("\n</think>", "")
+                chunk = {"choices": [{"delta": {"content": token}}]}
+                yield f"data: {json.dumps(chunk)}\n\n"
+
+        if event.get("done"):
+            break
+
+    yield "data: [DONE]\n\n"
+    await stream_task
+
+
+# Helper function to accumulate tokens for non-streaming response.
+async def accumulate_tokens(
+    event_queue: asyncio.Queue, stream_task: asyncio.Task
+) -> str:
+    collected = ""
+    in_block = False
+
+    while True:
+        try:
+            event = await asyncio.wait_for(event_queue.get(), timeout=30)
+        except asyncio.TimeoutError:
+            break
+
+        if event.get("type") in ["message", "replace"]:
+            token = event["data"].get("reasoning_content", "")
+            # Start a <think> block only once.
+            if not in_block:
+                collected += "<think>\n"
+                in_block = True
+            collected += token
+            if event.get("block_end", False):
+                collected += "\n</think>"
+                in_block = False
+        if event.get("done"):
+            if in_block:
+                collected += "\n</think>"
+                in_block = False
+            break
+
+    await stream_task
+    collected = collected.rstrip()
+    if collected.endswith("</think>"):
+        collected = collected[: -len("</think>")].rstrip()
+    return collected
+
+
+@chat_router.post("/completions", response_model=ChatCompletionResponse)
 async def chat_completions(request: ChatCompletionRequest):
+    """
+    Handles chat completion requests by processing input through a pipeline and
+    returning the generated response. Supports both streaming and non-streaming
+    modes based on the request. Refer to the ChatCompletionRequest and
+    ReasoningEffort schemas for more information.
+
+    ## Args:
+    - `request` (`ChatCompletionRequest`): The input request containing model
+        details and streaming preference.
+
+    ## Returns:
+    - `dict` or `StreamingResponse`: A JSON response with the generated chat
+        completion, either as a single response or streamed chunks.
+    """  # To collect streamed events.
+    event_queue = asyncio.Queue()
+
+    # Emitter: push events (dictionaries) into the queue.
+    async def emitter(event: dict):
+        await event_queue.put(event)
+
+    # Launch the streaming pipeline task.
+    stream_task = asyncio.create_task(pipeline.run_stream(request, emitter))
+
     if request.stream:
-        aggregator = EventAggregator()
-        final_text = await pipeline.run(request, aggregator)
-        full_message = aggregator.get_buffer() + "\n" + final_text
-        final_response = {
-            "id": "mcts_response",
-            "object": "chat.completion",
-            "created": time.time(),
-            "model": request.model,
-            "choices": [{"message": {"role": "assistant", "content": full_message}}],
-        }
-
-        # Return a single JSON chunk with mimetype application/json
-        async def single_chunk() -> AsyncGenerator[str, None]:
-            yield json.dumps(final_response)
-
-        return StreamingResponse(single_chunk(), media_type="application/json")
+        return StreamingResponse(
+            streaming_event_generator(event_queue, stream_task),
+            media_type="text/event-stream",
+        )
     else:
-        aggregator = EventAggregator()
-        final_text = await pipeline.run(request, aggregator)
-        full_message = aggregator.get_buffer() + "\n" + final_text
-        return {
-            "id": "mcts_response",
-            "object": "chat.completion",
-            "created": time.time(),
-            "model": request.model,
-            "choices": [{"message": {"role": "assistant", "content": full_message}}],
-        }
+        collected = await accumulate_tokens(event_queue, stream_task)
+        chat_response = ChatCompletionResponse(
+            model=request.model,
+            choices=[
+                ChoiceModel(
+                    message=MessageModel(
+                        reasoning_content=collected,
+                        content=collected,
+                    )
+                )
+            ],
+        )
+        return JSONResponse(content=chat_response.model_dump())
 
 
-@app.get("/v1/models")
+@model_router.get("", response_description="Proxied JSON Response")
 async def list_models():
+    """
+    Asynchronously fetches the list of models from the OpenAI API.
+    Sends a `GET` request to the models endpoint and returns the JSON via a proxy.
+    """
     url = f"{OPENAI_API_BASE_URL}/models"
     async with httpx.AsyncClient() as client:
         resp = await client.get(
@@ -126,7 +220,8 @@ async def list_models():
     return JSONResponse(content=data)
 
 
-if __name__ == "__main__":
-    import uvicorn
+app.include_router(model_router)
+app.include_router(chat_router)
 
+if __name__ == "__main__":
     uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True)

@@ -186,17 +186,18 @@ class MCTSAgent:
         root_content: str,
         llm_client: LLMClient,
         event_emitter: Callable[[dict], Awaitable[None]],
-        reasoning_effort: ReasoningEffort = ReasoningEffort.NORMAL,
+        reasoning_effort: ReasoningEffort = ReasoningEffort.LOW,
     ):
         self.model = model
         self.question = question
         self.llm_client = llm_client
         self.event_emitter = event_emitter
         # Configure MCTS parameters based on the desired reasoning effort
-        if reasoning_effort == ReasoningEffort.NORMAL:
-            self.max_iterations = 2  # minimum 2 iterations
-            self.max_simulations = 2
-            self.max_children = 2
+        if reasoning_effort == ReasoningEffort.LOW:
+            # minimum 2 iterations
+            self.max_iterations = DEFAULT_MAX_ITERATIONS
+            self.max_simulations = DEFAULT_MAX_SIMULATIONS
+            self.max_children = DEFAULT_MAX_CHILDREN
         elif reasoning_effort == ReasoningEffort.MEDIUM:
             self.max_iterations = 3
             self.max_simulations = 3
@@ -207,9 +208,9 @@ class MCTSAgent:
             self.max_children = 4
         else:
             # Fallback to normal if unrecognized effort
-            self.max_iterations = 2
-            self.max_simulations = 2
-            self.max_children = 2
+            self.max_iterations = DEFAULT_MAX_ITERATIONS
+            self.max_simulations = DEFAULT_MAX_SIMULATIONS
+            self.max_children = DEFAULT_MAX_CHILDREN
 
         # Initialize the root node with the agent's max_children setting
         self.root = Node(content=root_content, max_children=self.max_children)
@@ -293,7 +294,7 @@ class MCTSAgent:
                 best_answer = current_node.content
 
         await self.emit_message(
-            f"\n\n---\n<details>\n<summary>Best Answer:</summary>\n\n{best_answer}\n\n</details>\n\n</think>\n"
+            f"\n\n---\n<details>\n<summary>Best Answer:</summary>\n\n{best_answer}\n\n</details>"
         )
         return best_answer
 
@@ -341,17 +342,25 @@ class MCTSAgent:
             node = node.parent
 
     async def generate_completion(self, prompt: str) -> str:
-        """
-        Gets a streaming completion from the LLM for a given prompt.
-        Returns the accumulated response content.
-        """
         messages = [{"role": "user", "content": prompt}]
-        content = ""
+        tokens = []  # Buffer all tokens.
         async for token in self.llm_client.get_streaming_completion(
             messages, self.model
         ):
-            content += token
-            await self.emit_message(token)
+            tokens.append(token)
+            # Remove per-token emission to prevent duplicates.
+            # (If you need per-token updates for true streaming,
+            #  consider having a separate flag or using the pipeline’s emitter.)
+
+        content = "".join(tokens)
+        if content:
+            # Emit once for the whole block.
+            await self.event_emitter(
+                {
+                    "type": "message",
+                    "data": {"reasoning_content": content, "content": content},
+                }
+            )
         return content
 
     async def generate_thought(self, answer: str) -> str:
@@ -397,19 +406,33 @@ class MCTSAgent:
         """
         mermaid = "```mermaid\n" + self.root.get_mermaid_lines() + "\n```"
         iterations = ""
-        for itr in self.iteration_responses:
-            iterations += f"\nIteration {itr['iteration']}:\n"
+        for idx, itr in enumerate(self.iteration_responses):
+            iterations += f"\n{idx+1}. Iteration ({itr['iteration']}):\n"
             for resp in itr["responses"]:
-                iterations += f"- Node `{resp['node_id']}`: Score `{resp['score']}`\n"
-                iterations += f"  - **Response**: {resp['content']}\n"
-        msg = f"<think>\n\n<details>\n<summary>Expand to View Intermediate Iterations</summary>\n\n{mermaid}\n{iterations}\n\n</details>\n"
+                iterations += (
+                    f"\n- Node `{resp['node_id']}`: Score `{resp['score']}` out of 10\n"
+                )
+                iterations += f"\n- **Response**: {resp['content'].strip()}\n"
+
+        msg = "\n<details>\n\n<summary>Expand to View Intermediate Iterations</summary>"
+        msg += f"\n\n{mermaid}\n{iterations}\n\n</details>\n\n---\n"
         await self.emit_replace(msg)
 
     async def emit_message(self, message: str):
-        await self.event_emitter({"type": "message", "data": {"content": message}})
+        await self.event_emitter(
+            {
+                "type": "message",
+                "data": {"reasoning_content": message, "content": message},
+            }
+        )
 
     async def emit_status(self, message: str):
         await self.event_emitter({"type": "status", "data": {"description": message}})
 
     async def emit_replace(self, content: str):
-        await self.event_emitter({"type": "replace", "data": {"content": content}})
+        await self.event_emitter(
+            {
+                "type": "replace",
+                "data": {"reasoning_content": content, "content": content},
+            }
+        )
