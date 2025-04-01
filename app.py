@@ -157,7 +157,20 @@ async def accumulate_tokens(
 
 @chat_router.post("/completions", response_model=ChatCompletionResponse)
 async def chat_completions(request: ChatCompletionRequest):
-    # Create an asyncio.Queue to collect streamed events.
+    """
+    Handles chat completion requests by processing input through a pipeline and
+    returning the generated response. Supports both streaming and non-streaming
+    modes based on the request. Refer to the ChatCompletionRequest and
+    ReasoningEffort schemas for more information.
+
+    ## Args:
+    - `request` (`ChatCompletionRequest`): The input request containing model
+        details and streaming preference.
+
+    ## Returns:
+    - `dict` or `StreamingResponse`: A JSON response with the generated chat
+        completion, either as a single response or streamed chunks.
+    """  # To collect streamed events.
     event_queue = asyncio.Queue()
 
     # Emitter: push events (dictionaries) into the queue.
