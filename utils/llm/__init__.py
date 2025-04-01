@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 # LLM Client (Wrapper for LangChain OpenAI Chat Model)
 from typing import Any, List, AsyncGenerator
-from loguru import logger
 import asyncio
 
 from langchain.schema import AIMessage, HumanMessage

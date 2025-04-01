@@ -194,9 +194,10 @@ class MCTSAgent:
         self.event_emitter = event_emitter
         # Configure MCTS parameters based on the desired reasoning effort
         if reasoning_effort == ReasoningEffort.LOW:
-            self.max_iterations = 2  # minimum 2 iterations
-            self.max_simulations = 2
-            self.max_children = 2
+            # minimum 2 iterations
+            self.max_iterations = DEFAULT_MAX_ITERATIONS
+            self.max_simulations = DEFAULT_MAX_SIMULATIONS
+            self.max_children = DEFAULT_MAX_CHILDREN
         elif reasoning_effort == ReasoningEffort.MEDIUM:
             self.max_iterations = 3
             self.max_simulations = 3
@@ -207,9 +208,9 @@ class MCTSAgent:
             self.max_children = 4
         else:
             # Fallback to normal if unrecognized effort
-            self.max_iterations = 2
-            self.max_simulations = 2
-            self.max_children = 2
+            self.max_iterations = DEFAULT_MAX_ITERATIONS
+            self.max_simulations = DEFAULT_MAX_SIMULATIONS
+            self.max_children = DEFAULT_MAX_CHILDREN
 
         # Initialize the root node with the agent's max_children setting
         self.root = Node(content=root_content, max_children=self.max_children)
@@ -408,10 +409,13 @@ class MCTSAgent:
         for idx, itr in enumerate(self.iteration_responses):
             iterations += f"\n{idx+1}. Iteration ({itr['iteration']}):\n"
             for resp in itr["responses"]:
-                iterations += f"\n- Node `{resp['node_id']}`: Score `{resp['score']}` out of 10\n"
+                iterations += (
+                    f"\n- Node `{resp['node_id']}`: Score `{resp['score']}` out of 10\n"
+                )
                 iterations += f"\n- **Response**: {resp['content'].strip()}\n"
 
-        msg = f"\n<details>\n\n<summary>Expand to View Intermediate Iterations</summary>\n\n{mermaid}\n{iterations}\n\n</details>\n\n---\n"
+        msg = "\n<details>\n\n<summary>Expand to View Intermediate Iterations</summary>"
+        msg += f"\n\n{mermaid}\n{iterations}\n\n</details>\n\n---\n"
         await self.emit_replace(msg)
 
     async def emit_message(self, message: str):
