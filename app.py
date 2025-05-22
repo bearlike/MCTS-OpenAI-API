@@ -198,7 +198,9 @@ async def chat_completions(request: ChatCompletionRequest):
                 )
             ],
         )
-        return JSONResponse(content=chat_response.model_dump())
+        return JSONResponse(
+            content=chat_response.model_dump(), media_type="application/json"
+        )
 
 
 @model_router.get("", response_description="Proxied JSON Response")
@@ -217,7 +219,7 @@ async def list_models():
                 status_code=resp.status_code, detail="Failed to proxy models endpoint."
             )
         data = resp.json()
-    return JSONResponse(content=data)
+    return JSONResponse(content=data, media_type="application/json")
 
 
 app.include_router(model_router)
